@@ -143,8 +143,14 @@ class Renderer:
                 )
                 continue
 
-            owner = game_state.territory_owners.get(terr_id)
-            armies = game_state.territory_armies.get(terr_id, 0)
+            owner = (
+                game_state.owner[terr_id]
+                if terr_id < len(game_state.owner) and game_state.owner[terr_id] != -1
+                else None
+            )
+            armies = (
+                game_state.armies[terr_id] if terr_id < len(game_state.armies) else 0
+            )
 
             if owner is None or owner not in self.player_colors:
                 fill_color = (180, 180, 180)  # Default grey for unowned

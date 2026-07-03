@@ -348,8 +348,7 @@ class GameManager:
         Check if there is a winner in the game.
         A player wins if they own all territories.
         """
-        territory_owners = set(self.game_state.territory_owners.values())
-        return len(territory_owners) == 1
+        return self.game_state.is_terminal()
 
     def load_settings(self, settings_path: str = 'data/settings.yaml') -> None:
         """

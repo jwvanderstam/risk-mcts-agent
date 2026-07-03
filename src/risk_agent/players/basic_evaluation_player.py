@@ -193,15 +193,15 @@ class BasicEvaluationPlayer(Player):
         Calculate the maximum threat of any enemy player to a specific territory.
         """
         max_threat = 0.0
-        player_id = game_state.territory_owners[territory_id]
-        defending_armies = game_state.territory_armies[territory_id]
+        player_id = game_state.owner[territory_id]
+        defending_armies = game_state.armies[territory_id]
 
         for neighbor_id in game_state.board.adjacency_list[territory_id]:
-            if game_state.territory_owners[neighbor_id] == player_id:
+            if game_state.owner[neighbor_id] == player_id:
                 continue
 
-            enemy_player_id = game_state.territory_owners[neighbor_id]
-            enemy_armies = game_state.territory_armies[neighbor_id]
+            enemy_player_id = game_state.owner[neighbor_id]
+            enemy_armies = game_state.armies[neighbor_id]
 
             threat = self.battle_computer.get_attacker_win_rate(
                 attacking_armies=enemy_armies,
@@ -219,7 +219,7 @@ class BasicEvaluationPlayer(Player):
         """
         Calculate the distance to the nearest enemy territory.
         """
-        player_id = game_state.territory_owners[territory_id]
+        player_id = game_state.owner[territory_id]
         visited = set()
         queue = [(territory_id, 0)]
 
@@ -232,7 +232,7 @@ class BasicEvaluationPlayer(Player):
             visited.add(current_territory)
 
             for neighbor_id in game_state.board.adjacency_list[current_territory]:
-                if game_state.territory_owners[neighbor_id] != player_id:
+                if game_state.owner[neighbor_id] != player_id:
                     return distance + 1
 
                 queue.append((neighbor_id, distance + 1))
@@ -270,10 +270,10 @@ class BasicEvaluationPlayer(Player):
         """
         player_armies = 0
         total_armies = 0
-        for territory_id in game_state.territory_owners:
-            if game_state.territory_owners[territory_id] == player_id:
-                player_armies += game_state.territory_armies[territory_id]
-            total_armies += game_state.territory_armies[territory_id]
+        for territory_id in game_state.territory_ids:
+            if game_state.owner[territory_id] == player_id:
+                player_armies += game_state.armies[territory_id]
+            total_armies += game_state.armies[territory_id]
 
         return player_armies / total_armies if total_armies > 0 else 0.0
 
@@ -292,8 +292,8 @@ class BasicEvaluationPlayer(Player):
             enemy_territories = len(
                 [
                     territory_id
-                    for territory_id in game_state.territory_owners
-                    if game_state.territory_owners[territory_id] == enemy_id
+                    for territory_id in game_state.territory_ids
+                    if game_state.owner[territory_id] == enemy_id
                 ]
             )
             enemy_rating += enemy_territories / len(game_state.board.territories)
@@ -314,7 +314,7 @@ class BasicEvaluationPlayer(Player):
         for continent_id, continent in game_state.board.continents.items():
             # check if the player owns the continent
             if all(
-                game_state.territory_owners[territory_id] == player_id
+                game_state.owner[territory_id] == player_id
                 for territory_id in continent['territories']
             ):
                 threat_sum = 0.0
@@ -323,7 +323,7 @@ class BasicEvaluationPlayer(Player):
                 # for each border territory of the continent, calculate the threat
                 for territory_id in continent['territories']:
                     for neighbor_id in game_state.board.adjacency_list[territory_id]:
-                        if game_state.territory_owners[neighbor_id] != player_id:
+                        if game_state.owner[neighbor_id] != player_id:
                             threat = self.threat(game_state, territory_id)
                             threat_sum += threat**2
 
@@ -348,12 +348,12 @@ class BasicEvaluationPlayer(Player):
             owns_continent: bool = True
             enemy_player_id = -1
             for territory_id in continent['territories']:
-                if game_state.territory_owners[territory_id] == player_id:
+                if game_state.owner[territory_id] == player_id:
                     owns_continent = False
                     continue
                 elif enemy_player_id == -1:
-                    enemy_player_id = game_state.territory_owners[territory_id]
-                elif game_state.territory_owners[territory_id] != enemy_player_id:
+                    enemy_player_id = game_state.owner[territory_id]
+                elif game_state.owner[territory_id] != enemy_player_id:
                     owns_continent = False
                     break
 
@@ -362,7 +362,7 @@ class BasicEvaluationPlayer(Player):
 
                 for territory_id in continent['territories']:
                     for neighbor_id in game_state.board.adjacency_list[territory_id]:
-                        if game_state.territory_owners[neighbor_id] != enemy_player_id:
+                        if game_state.owner[neighbor_id] != enemy_player_id:
                             # add the threat of the enemy player to the continent
                             threat = self.threat(game_state, territory_id)
                             threat_sum += threat**2
@@ -380,11 +380,11 @@ class BasicEvaluationPlayer(Player):
         player_armies: int = 0
         sum_term: int = 0
 
-        for territory_id in game_state.territory_owners:
-            if game_state.territory_owners[territory_id] == player_id:
-                player_armies += game_state.territory_armies[territory_id]
+        for territory_id in game_state.territory_ids:
+            if game_state.owner[territory_id] == player_id:
+                player_armies += game_state.armies[territory_id]
                 distance = self.distance_to_nearest_enemy(game_state, territory_id)
-                sum_term += distance * game_state.territory_armies[territory_id]
+                sum_term += distance * game_state.armies[territory_id]
 
         return player_armies / sum_term if sum_term > 0 else 0.0
 
@@ -419,12 +419,12 @@ class BasicEvaluationPlayer(Player):
             owns_continent: bool = True
             enemy_player_id = -1
             for territory_id in continent['territories']:
-                if game_state.territory_owners[territory_id] == player_id:
+                if game_state.owner[territory_id] == player_id:
                     owns_continent = False
                     continue
                 elif enemy_player_id == -1:
-                    enemy_player_id = game_state.territory_owners[territory_id]
-                elif game_state.territory_owners[territory_id] != enemy_player_id:
+                    enemy_player_id = game_state.owner[territory_id]
+                elif game_state.owner[territory_id] != enemy_player_id:
                     owns_continent = False
                     break
 
@@ -442,11 +442,11 @@ class BasicEvaluationPlayer(Player):
         player_territories = 0
         hinterland_territories = 0
 
-        for territory_id in game_state.territory_owners:
-            if game_state.territory_owners[territory_id] == player_id:
+        for territory_id in game_state.territory_ids:
+            if game_state.owner[territory_id] == player_id:
                 is_hinterland = True
                 for neighbor_id in game_state.board.adjacency_list[territory_id]:
-                    if game_state.territory_owners[neighbor_id] != player_id:
+                    if game_state.owner[neighbor_id] != player_id:
                         is_hinterland = False
                         break
                 if is_hinterland:
@@ -466,14 +466,14 @@ class BasicEvaluationPlayer(Player):
         """
         max_threat = 0.0
 
-        for territory_id in game_state.territory_owners:
-            attacking_armies = game_state.territory_armies[territory_id] - 1
-            if game_state.territory_owners[territory_id] == player_id:
+        for territory_id in game_state.territory_ids:
+            attacking_armies = game_state.armies[territory_id] - 1
+            if game_state.owner[territory_id] == player_id:
                 for neighbor_id in game_state.board.adjacency_list[territory_id]:
-                    if game_state.territory_owners[neighbor_id] != player_id:
+                    if game_state.owner[neighbor_id] != player_id:
                         threat = self.battle_computer.get_attacker_win_rate(
                             attacking_armies=attacking_armies,
-                            defending_armies=game_state.territory_armies[neighbor_id],
+                            defending_armies=game_state.armies[neighbor_id],
                         )
 
                         if threat > max_threat:
@@ -490,10 +490,10 @@ class BasicEvaluationPlayer(Player):
         territories_with_more_than_one_army = 0
         total_territories = 0
 
-        for territory_id in game_state.territory_owners:
-            if game_state.territory_owners[territory_id] == player_id:
+        for territory_id in game_state.territory_ids:
+            if game_state.owner[territory_id] == player_id:
                 total_territories += 1
-                if game_state.territory_armies[territory_id] > 1:
+                if game_state.armies[territory_id] > 1:
                     territories_with_more_than_one_army += 1
 
         return (
@@ -511,8 +511,8 @@ class BasicEvaluationPlayer(Player):
         occupied_territories = 0
         total_territories = len(game_state.board.territories)
 
-        for territory_id in game_state.territory_owners:
-            if game_state.territory_owners[territory_id] == player_id:
+        for territory_id in game_state.territory_ids:
+            if game_state.owner[territory_id] == player_id:
                 occupied_territories += 1
 
         return (
@@ -541,7 +541,7 @@ class BasicEvaluationPlayer(Player):
         for continent_id, continent in game_state.board.continents.items():
             # check if the player owns the continent
             if all(
-                game_state.territory_owners[territory_id] == player_id
+                game_state.owner[territory_id] == player_id
                 for territory_id in continent['territories']
             ):
                 own_continents += 1
@@ -560,9 +560,9 @@ class BasicEvaluationPlayer(Player):
         for card in game_state.player_hands[player_id]:
             card_territory_id = card[1]
 
-            for territory_id in game_state.territory_owners:
+            for territory_id in game_state.territory_ids:
                 if (
-                    game_state.territory_owners[territory_id] == player_id
+                    game_state.owner[territory_id] == player_id
                     and territory_id == card_territory_id
                 ):
                     own_risk_card_territories += 1
@@ -605,8 +605,8 @@ class BasicEvaluationPlayer(Player):
         total_territories = len(game_state.board.territories)
         occupied_territories = sum(
             1
-            for territory_id in game_state.territory_owners
-            if game_state.territory_owners[territory_id] == player_id
+            for territory_id in game_state.territory_ids
+            if game_state.owner[territory_id] == player_id
         )
 
         control_percentage = occupied_territories / total_territories

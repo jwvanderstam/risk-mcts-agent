@@ -146,12 +146,12 @@ class TradeCardsAction(Action):
         added_extra_armies = False
         for card in self.cards:
             if not added_extra_armies:
-                for territory in new_game_state.territory_owners:
+                for territory in new_game_state.territory_ids:
                     if (
-                        new_game_state.territory_owners[territory] == self.player_id
+                        new_game_state.owner[territory] == self.player_id
                         and card[1] == territory
                     ):
-                        new_game_state.territory_armies[territory] += 2
+                        new_game_state.armies[territory] += 2
                         added_extra_armies = True
 
         for card in self.cards:
@@ -184,7 +184,7 @@ class ReinforceAction(Action):
         """
         new_game_state = game_state.copy()
         new_game_state.reinforcements_this_turn += self.armies
-        new_game_state.territory_armies[self.territory] += self.armies
+        new_game_state.armies[self.territory] += self.armies
         return new_game_state
 
 
@@ -219,32 +219,20 @@ class AttackAction(Action):
         new_game_state = game_state.copy()
 
         attacking_player = new_game_state.current_player
-        defending_player = new_game_state.territory_owners[self.to_territory]
+        defending_player = new_game_state.owner[self.to_territory]
 
         if outcome[0] == 0:
             # defender wins, attacker loses all armies (except one)
-            new_game_state.territory_armies[self.from_territory] -= (
-                self.attacking_armies
-            )
+            new_game_state.armies[self.from_territory] -= self.attacking_armies
             # the defender has the remaining armies from the outcome
-            new_game_state.territory_armies[self.to_territory] = outcome[1]
+            new_game_state.armies[self.to_territory] = outcome[1]
         else:
             # attacker wins
-            new_game_state.territory_armies[self.from_territory] -= (
-                self.attacking_armies
-            )
-            new_game_state.territory_armies[self.to_territory] = outcome[0]
+            new_game_state.armies[self.from_territory] -= self.attacking_armies
+            new_game_state.armies[self.to_territory] = outcome[0]
 
             # transfer the territory to the attacker
-            new_game_state.player_territories[defending_player].remove(
-                self.to_territory
-            )
-            new_game_state.player_territories[attacking_player].append(
-                self.to_territory
-            )
-            new_game_state.territory_owners[self.to_territory] = (
-                new_game_state.current_player
-            )
+            new_game_state.owner[self.to_territory] = new_game_state.current_player
 
             new_game_state.conquered_territory_this_turn = True
 
@@ -252,8 +240,8 @@ class AttackAction(Action):
             # Their cards are transferred to the attacker, and check whether the
             # player now has more than 4 cards and therefore and has to trade
             if not any(
-                new_game_state.territory_owners[territory] == defending_player
-                for territory in new_game_state.territory_owners
+                new_game_state.owner[territory] == defending_player
+                for territory in new_game_state.territory_ids
             ):
                 new_game_state.defeated_players.append(defending_player)
 
@@ -274,18 +262,15 @@ class AttackAction(Action):
         """
         Apply the attack action to the game state.
         """
-        new_game_state = game_state.copy()
-
         # get the combat outcomes from the game engine
         outcome = battle_computer.get_outcome(
             attacking_armies=self.attacking_armies,
             defending_armies=self.defending_armies,
         )
 
-        # apply the outcome to the game state
-        new_game_state = self.apply_outcome(game_state=new_game_state, outcome=outcome)
-
-        return new_game_state
+        # apply_outcome() makes its own copy of game_state, so no need to
+        # copy it here first.
+        return self.apply_outcome(game_state=game_state, outcome=outcome)
 
 
 class FortifyAction(Action):
@@ -308,7 +293,7 @@ class FortifyAction(Action):
         Apply the fortify action to the game state.
         """
         new_game_state = game_state.copy()
-        new_game_state.territory_armies[self.from_territory] -= self.armies
-        new_game_state.territory_armies[self.to_territory] += self.armies
+        new_game_state.armies[self.from_territory] -= self.armies
+        new_game_state.armies[self.to_territory] += self.armies
         new_game_state.fortified_territory_this_turn = True
         return new_game_state

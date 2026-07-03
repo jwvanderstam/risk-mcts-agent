@@ -9,12 +9,10 @@ def _make_attack_phase_state(board) -> GameState:
     state = GameState()
     state.board = board
     state.number_of_players = 2
-    state.territory_owners = {t: 0 if t == 1 else 1 for t in board.territories}
-    state.territory_armies = {t: 5 if t == 1 else 3 for t in board.territories}
-    state.player_territories = {
-        0: [1],
-        1: [t for t in board.territories if t != 1],
-    }
+    state.reset_arrays(max(board.territories.keys()) + 1)
+    for t in board.territories:
+        state.owner[t] = 0 if t == 1 else 1
+        state.armies[t] = 5 if t == 1 else 3
     state.player_hands = {0: [], 1: []}
     state.deck = []
     state.current_player = 0
@@ -43,7 +41,7 @@ def test_get_valid_actions_attack_phase_targets_only_enemy_neighbours(board):
 
 def test_get_valid_actions_no_attacks_when_only_one_army(board):
     state = _make_attack_phase_state(board)
-    state.territory_armies[1] = 1
+    state.armies[1] = 1
 
     actions = GameEngine.get_valid_actions(state)
     assert all(not isinstance(a, AttackAction) for a in actions)
@@ -57,7 +55,7 @@ def test_calculate_base_reinforcements_continent_bonus(board):
         c for c in board.continents.values() if c['name'] == 'North America'
     )
     for t in north_america['territories']:
-        state.territory_owners[t] = 0
+        state.owner[t] = 0
 
     reinforcements = GameEngine.calculate_base_reinforcements(state, player_id=0)
     assert reinforcements >= north_america['bonus']

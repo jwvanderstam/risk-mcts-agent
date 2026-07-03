@@ -1,3 +1,4 @@
+import array
 import json
 
 from risk_agent.game_elements.board import Board
@@ -10,9 +11,10 @@ class GameState:
         """
         self.board = Board()
         self.number_of_players: int = -1
-        self.territory_owners: dict[int, int] = {}
-        self.player_territories: dict[int, list[int]] = {}
-        self.territory_armies: dict[int, int] = {}
+        # owner[t] / armies[t] are indexed directly by territory_id.
+        # Index 0 is unused (territory ids start at 1); owner[0] stays -1.
+        self.owner: array.array = array.array('b', [])
+        self.armies: array.array = array.array('i', [])
         self.player_hands: dict[int, list[tuple[int, int, str]]] = {}
         self.deck: list[tuple[int, int, str]] = []
         self.current_player: int = -1
@@ -29,11 +31,32 @@ class GameState:
         self.card_trade_in_this_turn: int = -1
         self.fortified_territory_this_turn: bool = False
 
+    def reset_arrays(self, num_territories: int) -> None:
+        """
+        (Re)initialise the owner/armies arrays to hold `num_territories` slots
+        (indices 0..num_territories-1; index 0 is left unused as a sentinel).
+        """
+        self.owner = array.array('b', [-1]) * num_territories
+        self.armies = array.array('i', [0]) * num_territories
+
+    @property
+    def territory_ids(self) -> range:
+        """
+        The valid territory ids for this state (excludes the unused index 0).
+        """
+        return range(1, len(self.owner))
+
+    def territories_owned_by(self, player_id: int) -> list[int]:
+        """
+        Return the list of territory ids currently owned by a player.
+        """
+        return [t for t in self.territory_ids if self.owner[t] == player_id]
+
     def is_terminal(self) -> bool:
         """
         Check if the game state is terminal (i.e., only one player remains).
         """
-        return len(set(self.territory_owners.values())) == 1
+        return len(set(self.owner[1:])) == 1
 
     def determine_winner(self) -> int:
         """
@@ -55,8 +78,8 @@ class GameState:
             f'GameState(current_player={self.current_player}, '
             f'current_turn_phase={self.current_turn_phase}, '
             f'current_turn={self.current_turn}, '
-            f'territory_owners={self.territory_owners}, '
-            f'territory_armies={self.territory_armies}, '
+            f'owner={list(self.owner)}, '
+            f'armies={list(self.armies)}, '
             f'player_hands={self.player_hands}, '
             f'defeated_players={self.defeated_players})'
         )
@@ -68,9 +91,8 @@ class GameState:
         return (
             self.board == value.board
             and self.number_of_players == value.number_of_players
-            and self.territory_owners == value.territory_owners
-            and self.player_territories == value.player_territories
-            and self.territory_armies == value.territory_armies
+            and self.owner == value.owner
+            and self.armies == value.armies
             and self.player_hands == value.player_hands
             and self.deck == value.deck
             and self.current_player == value.current_player
@@ -90,16 +112,15 @@ class GameState:
 
     def copy(self) -> 'GameState':
         """
-        Create a deep copy of the game state.
+        Create a copy of the game state.
         """
         new_state = GameState()
-        new_state.board = self.board.copy()
+        # The board is never mutated after being loaded, so it is safe (and
+        # much cheaper) to share the reference instead of deep-copying it.
+        new_state.board = self.board
         new_state.number_of_players = self.number_of_players
-        new_state.territory_owners = self.territory_owners.copy()
-        new_state.player_territories = {
-            k: v.copy() for k, v in self.player_territories.items()
-        }
-        new_state.territory_armies = self.territory_armies.copy()
+        new_state.owner = array.array(self.owner.typecode, self.owner)
+        new_state.armies = array.array(self.armies.typecode, self.armies)
 
         # Create a deep copy of player hands and deck
         new_state.player_hands = {p: list(h) for p, h in self.player_hands.items()}
@@ -126,6 +147,8 @@ class GameState:
         # Save everything except the board
         data = self.__dict__.copy()
         data['board'] = None
+        data['owner'] = list(self.owner)
+        data['armies'] = list(self.armies)
         with open(file_path, 'w') as f:
             json.dump(data, f, indent=4)
 
@@ -138,9 +161,10 @@ class GameState:
             data = json.load(f)
         self.__dict__.update(data)
 
+        self.owner = array.array('b', self.owner)
+        self.armies = array.array('i', self.armies)
+
         # Convert dictionary keys from string back to int after loading
-        self.territory_owners = {int(k): v for k, v in self.territory_owners.items()}
-        self.territory_armies = {int(k): v for k, v in self.territory_armies.items()}
         self.player_hands = {int(k): v for k, v in self.player_hands.items()}
 
         # Load the board separately

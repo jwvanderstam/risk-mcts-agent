@@ -828,8 +828,8 @@ class ConfidentMCTSTree(MCTSTree):
                     for action in legal_actions
                     if not (
                         isinstance(action, AttackAction)
-                        and action.to_territory
-                        in game_state.player_territories[self.alliance_player_id]
+                        and game_state.owner[action.to_territory]
+                        == self.alliance_player_id
                     )
                 ]
         elif (
@@ -843,8 +843,7 @@ class ConfidentMCTSTree(MCTSTree):
                     for action in legal_actions
                     if not (
                         isinstance(action, AttackAction)
-                        and action.to_territory
-                        in game_state.player_territories[self.player_id]
+                        and game_state.owner[action.to_territory] == self.player_id
                     )
                 ]
 

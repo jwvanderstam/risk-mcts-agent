@@ -64,10 +64,14 @@ class DataCollector:
             'active_player_id': game_state.current_player,
         }
         # Add territory and army counts for each player
-        territory_counts = Counter(game_state.territory_owners.values())
+        territory_counts = Counter(
+            game_state.owner[t] for t in game_state.territory_ids
+        )
         army_counts = Counter()
-        for territory_id, owner in game_state.territory_owners.items():
-            army_counts[owner] += game_state.territory_armies.get(territory_id, 0)
+        for territory_id in game_state.territory_ids:
+            army_counts[game_state.owner[territory_id]] += game_state.armies[
+                territory_id
+            ]
 
         for i in range(self.number_of_players):
             turn_record[f'player_{i}_armies'] = army_counts.get(i, 0)
@@ -100,7 +104,7 @@ class DataCollector:
             end_reason = 'Max Turns Reached'
         elif any(
             armies >= self.max_attacking_armies or armies > self.max_defending_armies
-            for territory, armies in game_state.territory_armies.items()
+            for armies in game_state.armies[1:]
         ):
             end_reason = 'Max armies exceeded'
         else:

@@ -38,29 +38,20 @@ class GameEngine:
         # Randomize player positions
         territories = list(game_state.board.territories.keys())
         random.shuffle(territories)
-        game_state.territory_owners = {
-            territory: i % number_of_players for i, territory in enumerate(territories)
-        }
-
-        for territory, owner in game_state.territory_owners.items():
-            if owner in game_state.player_territories:
-                game_state.player_territories[owner].append(territory)
-            else:
-                game_state.player_territories[owner] = [territory]
+        game_state.reset_arrays(max(game_state.board.territories.keys()) + 1)
+        for i, territory in enumerate(territories):
+            game_state.owner[territory] = i % number_of_players
 
         # Each player starts with 30 armies, one per territory, then distributed randomly
         for player_id in range(number_of_players):
-            armies_placed = 0
-            for territory in game_state.player_territories[player_id]:
-                game_state.territory_armies[territory] = 1
-                armies_placed += 1
+            player_territories = game_state.territories_owned_by(player_id)
+            for territory in player_territories:
+                game_state.armies[territory] = 1
 
-            armies_to_distribute = 30 - armies_placed
+            armies_to_distribute = 30 - len(player_territories)
             for _ in range(armies_to_distribute):
-                random_territory = random.choice(
-                    game_state.player_territories[player_id]
-                )
-                game_state.territory_armies[random_territory] += 1
+                random_territory = random.choice(player_territories)
+                game_state.armies[random_territory] += 1
 
         # Populate the deck with cards
         card_types = {
@@ -123,14 +114,14 @@ class GameEngine:
                 continue
             visited.add(current_territory)
 
-            if current_territory in game_state.player_territories[player_id]:
+            if game_state.owner[current_territory] == player_id:
                 reachable_territories.add(current_territory)
                 for adjacent_territory in game_state.board.adjacency_list[
                     current_territory
                 ]:
                     if (
                         adjacent_territory not in visited
-                        and game_state.territory_owners[adjacent_territory] == player_id
+                        and game_state.owner[adjacent_territory] == player_id
                     ):
                         queue.append(adjacent_territory)
 
@@ -142,8 +133,8 @@ class GameEngine:
         Get the valid actions for the current game state.
         """
         # to avoid repeated dict lookups, we pull out local variables
-        owners = game_state.territory_owners
-        armies = game_state.territory_armies
+        owners = game_state.owner
+        armies = game_state.armies
         player = game_state.current_player
 
         valid_actions = []
@@ -172,7 +163,7 @@ class GameEngine:
                 if game_state.reinforcements_this_turn == total_reinforcements:
                     return [EndPhaseAction()]
 
-                for territory in game_state.player_territories[player]:
+                for territory in game_state.territories_owned_by(player):
                     for number_of_armies in range(
                         1,
                         total_reinforcements - game_state.reinforcements_this_turn + 1,
@@ -183,15 +174,12 @@ class GameEngine:
                             )
                         )
             case 'attack':
-                for territory in game_state.player_territories[player]:
+                for territory in game_state.territories_owned_by(player):
                     if armies[territory] > 1:
                         for target_territory in game_state.board.adjacency_list[
                             territory
                         ]:
-                            if (
-                                target_territory
-                                not in game_state.player_territories[player]
-                            ):
+                            if owners[target_territory] != player:
                                 valid_actions.append(
                                     AttackAction(
                                         from_territory=territory,
@@ -203,7 +191,7 @@ class GameEngine:
                 valid_actions.append(EndPhaseAction())
             case 'fortify':
                 if not game_state.fortified_territory_this_turn:
-                    for from_territory in game_state.player_territories[player]:
+                    for from_territory in game_state.territories_owned_by(player):
                         if armies[from_territory] > 1:
                             reachable_territories = (
                                 GameEngine._find_reachable_territories(
@@ -290,12 +278,14 @@ class GameEngine:
         - 3 armies for every 3 territories owned, with a minimum of 3 armies.
         - Additional armies for owning continents.
         """
-        base_reinforcements = max(3, len(game_state.player_territories[player_id]) // 3)
+        base_reinforcements = max(
+            3, len(game_state.territories_owned_by(player_id)) // 3
+        )
 
         continent_bonus = 0
         for continent in game_state.board.continents.values():
             if all(
-                game_state.territory_owners[territory] == player_id
+                game_state.owner[territory] == player_id
                 for territory in continent['territories']
             ):
                 continent_bonus += continent['bonus']
@@ -324,9 +314,9 @@ class GameEngine:
         Get the border territories for a player.
         """
         border_territories = []
-        for territory in game_state.player_territories[player_id]:
+        for territory in game_state.territories_owned_by(player_id):
             for adjacent_territory in game_state.board.adjacency_list[territory]:
-                if game_state.territory_owners[adjacent_territory] != player_id:
+                if game_state.owner[adjacent_territory] != player_id:
                     border_territories.append(territory)
                     break
         return border_territories
