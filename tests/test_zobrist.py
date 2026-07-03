@@ -1,8 +1,16 @@
-from risk_agent.game_elements.action import AttackAction, EndTurnAction
+import random
+
+from risk_agent.engine.battle_computer import BattleComputer
+from risk_agent.engine.game_engine import GameEngine
+from risk_agent.game_elements.action import (
+    AttackAction,
+    EndPhaseAction,
+    EndTurnAction,
+)
 from risk_agent.game_elements.game_state import GameState
 from risk_agent.game_elements.zobrist import compute_hands_deck_hash
-from risk_agent.players.mcts.tree import ChanceNode, MCTSNode, MCTSTree
 from risk_agent.players.mcts.config import MCTSConfig
+from risk_agent.players.mcts.tree import MCTSNode, MCTSTree
 from tests.test_golden_replay import _build_initial_state, _rebuild_action
 
 # Only a handful of full games is enough coverage for a per-step differential
@@ -19,6 +27,50 @@ def _apply_step(game_state: GameState, step: dict) -> GameState:
         card = tuple(step['card']) if step['card'] is not None else None
         return action.apply(game_state=game_state, card=card)
     return action.apply(game_state=game_state)
+
+
+def test_hash_consistent_through_real_game_engine_initialisation(board):
+    """
+    Regression test: GameEngine.initialise_random_game_state() must produce
+    a state whose hash already reflects base_reinforcements_this_turn, since
+    every real caller (GameManager._setup_game(), and every ad-hoc script)
+    sets that field via plain attribute assignment right after this call
+    returns - bypassing set_scalar() - rather than through this module's
+    other, incrementally-hash-maintained mutation paths. Building the
+    initial state some other way (as the golden-fixture replay tests do,
+    snapshotting a fully-populated state and calling recompute_hash() last)
+    would not have caught a staleness bug here.
+    """
+    random.seed(123)
+    battle_computer = BattleComputer(max_attacking_armies=100, max_defending_armies=100)
+
+    state = GameState()
+    state.board = board
+    state = GameEngine.initialise_random_game_state(state, 4)
+    state.base_reinforcements_this_turn = GameEngine.calculate_base_reinforcements(
+        state, state.current_player
+    )
+    assert state.zobrist_hash == state.copy().recompute_hash()
+
+    for _ in range(200):
+        if state.is_terminal():
+            break
+        current_player_id = state.current_player
+        if current_player_id in state.defeated_players:
+            state = GameEngine.apply_action(state, EndTurnAction())
+        else:
+            valid_actions = GameEngine.get_valid_actions(state)
+            action = (
+                random.choice(valid_actions)
+                if valid_actions
+                else (
+                    EndTurnAction()
+                    if state.current_turn_phase == 'fortify'
+                    else EndPhaseAction()
+                )
+            )
+            state = GameEngine.apply_action(state, action, battle_computer)
+        assert state.zobrist_hash == state.copy().recompute_hash()
 
 
 def test_incremental_hash_matches_full_recompute_after_every_step(

@@ -70,6 +70,17 @@ class GameEngine:
         # Initialize player hands
         game_state.player_hands = {i: [] for i in range(number_of_players)}
 
+        # Callers (e.g. GameManager) traditionally set base_reinforcements_this_turn
+        # themselves right after this call returns, via plain attribute
+        # assignment; computing it here too means the hash below is
+        # established against the actually-final initial state rather than
+        # going stale the moment the caller's assignment runs.
+        game_state.base_reinforcements_this_turn = (
+            GameEngine.calculate_base_reinforcements(
+                game_state, game_state.current_player
+            )
+        )
+
         # This builds up the state via direct field assignment rather than
         # the incremental set_owner()/set_armies()/set_scalar() setters (there
         # is no prior state to increment from), so establish the Zobrist hash

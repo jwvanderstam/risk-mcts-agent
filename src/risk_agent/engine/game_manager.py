@@ -106,7 +106,11 @@ class GameManager:
 
             try:
                 if self.save_final_game_state:
-                    self.game_state.to_json_file(self.game_state_save_path)
+                    if self.game_state_save_path.endswith('.fen'):
+                        with open(self.game_state_save_path, 'w') as f:
+                            f.write(self.game_state.to_fen())
+                    else:
+                        self.game_state.to_json_file(self.game_state_save_path)
                     logger.info(f'Game state saved to {self.game_state_save_path}')
             except Exception as e:
                 logger.error(f'Error saving game state: {e}')
@@ -221,9 +225,13 @@ class GameManager:
         Setup the game by initializing players and game state.
         """
         if self.load_game_state:
-            self.game_state.from_json_file(
-                self.game_state_load_path, self.board_file_path
-            )
+            if self.game_state_load_path.endswith('.fen'):
+                with open(self.game_state_load_path) as f:
+                    self.game_state.from_fen(f.read().strip(), self.board_file_path)
+            else:
+                self.game_state.from_json_file(
+                    self.game_state_load_path, self.board_file_path
+                )
         else:
             self.game_state.board.load_from_file(self.board_file_path)
             self.game_state = GameEngine.initialise_random_game_state(

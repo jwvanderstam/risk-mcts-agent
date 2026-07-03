@@ -277,3 +277,22 @@ class GameState:
         self.board.load_from_file(board_file_path)
 
         self.recompute_hash()
+
+    def to_fen(self) -> str:
+        """
+        Encode this state as a single-line FEN-like string. See
+        risk_agent.game_elements.fen for the format.
+        """
+        # Imported lazily to avoid a circular import (fen.py imports GameState).
+        from risk_agent.game_elements.fen import encode_fen
+
+        return encode_fen(self)
+
+    def from_fen(self, fen: str, board_file_path: str) -> None:
+        """
+        Load this state from a string produced by to_fen()/encode_fen().
+        """
+        from risk_agent.game_elements.fen import decode_fen
+
+        decoded = decode_fen(fen, board_file_path)
+        self.__dict__.update(decoded.__dict__)
