@@ -49,7 +49,7 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for better analysis relevance
 
       - name: Analyze with SonarCloud
-        if: ${{ env.SONAR_TOKEN != '' }}
+        if: ${{ secrets.SONAR_TOKEN != '' }}
 
         # You can pin the exact commit or the version.
         # uses: SonarSource/sonarcloud-github-action@v2.2.0
