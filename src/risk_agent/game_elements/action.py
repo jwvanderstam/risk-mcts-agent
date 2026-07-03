@@ -52,11 +52,11 @@ class EndPhaseAction(Action):
         new_game_state = game_state.copy()
         match game_state.current_turn_phase:
             case 'trade_cards':
-                new_game_state.current_turn_phase = 'reinforce'
+                new_game_state.set_scalar('current_turn_phase', 'reinforce')
             case 'reinforce':
-                new_game_state.current_turn_phase = 'attack'
+                new_game_state.set_scalar('current_turn_phase', 'attack')
             case 'attack':
-                new_game_state.current_turn_phase = 'fortify'
+                new_game_state.set_scalar('current_turn_phase', 'fortify')
 
         return new_game_state
 
@@ -90,27 +90,30 @@ class EndTurnAction(Action):
                     random.choice(range(len(new_game_state.deck)))
                 )
                 new_game_state.player_hands[new_game_state.current_player].append(card)
+            new_game_state.recompute_hands_deck_hash()
 
-        new_game_state.current_turn_phase = 'trade_cards'
-        new_game_state.current_turn += 1
+        new_game_state.set_scalar('current_turn_phase', 'trade_cards')
+        new_game_state.set_scalar('current_turn', new_game_state.current_turn + 1)
         if new_game_state.current_turn % new_game_state.number_of_players == 0:
-            new_game_state.current_round += 1
-        new_game_state.current_player = (
-            new_game_state.current_player + 1
-        ) % new_game_state.number_of_players
+            new_game_state.set_scalar('current_round', new_game_state.current_round + 1)
+        new_game_state.set_scalar(
+            'current_player',
+            (new_game_state.current_player + 1) % new_game_state.number_of_players,
+        )
 
-        new_game_state.conquered_territory_this_turn = False
-        new_game_state.reinforcements_this_turn = 0
-        new_game_state.card_trade_in_this_turn = -1
-        new_game_state.fortified_territory_this_turn = False
+        new_game_state.set_scalar('conquered_territory_this_turn', False)
+        new_game_state.set_scalar('reinforcements_this_turn', 0)
+        new_game_state.set_scalar('card_trade_in_this_turn', -1)
+        new_game_state.set_scalar('fortified_territory_this_turn', False)
 
         # Import GameEngine here to avoid circular imports
         from risk_agent.engine.game_engine import GameEngine
 
-        new_game_state.base_reinforcements_this_turn = (
+        new_game_state.set_scalar(
+            'base_reinforcements_this_turn',
             GameEngine.calculate_base_reinforcements(
                 new_game_state, new_game_state.current_player
-            )
+            ),
         )
 
         return new_game_state
@@ -139,9 +142,12 @@ class TradeCardsAction(Action):
         new_game_state = game_state.copy()
 
         if game_state.card_trade_in_this_turn != -1:
-            new_game_state.card_trade_in_this_turn += self.value
+            new_game_state.set_scalar(
+                'card_trade_in_this_turn',
+                new_game_state.card_trade_in_this_turn + self.value,
+            )
         else:
-            new_game_state.card_trade_in_this_turn = self.value
+            new_game_state.set_scalar('card_trade_in_this_turn', self.value)
 
         added_extra_armies = False
         for card in self.cards:
@@ -151,7 +157,7 @@ class TradeCardsAction(Action):
                         new_game_state.owner[territory] == self.player_id
                         and card[1] == territory
                     ):
-                        new_game_state.armies[territory] += 2
+                        new_game_state.add_armies(territory, 2)
                         added_extra_armies = True
 
         for card in self.cards:
@@ -161,6 +167,7 @@ class TradeCardsAction(Action):
             new_game_state.player_hands[self.player_id].remove(card)
 
         random.shuffle(new_game_state.deck)
+        new_game_state.recompute_hands_deck_hash()
 
         return new_game_state
 
@@ -183,8 +190,11 @@ class ReinforceAction(Action):
         Apply the reinforce action to the game state.
         """
         new_game_state = game_state.copy()
-        new_game_state.reinforcements_this_turn += self.armies
-        new_game_state.armies[self.territory] += self.armies
+        new_game_state.set_scalar(
+            'reinforcements_this_turn',
+            new_game_state.reinforcements_this_turn + self.armies,
+        )
+        new_game_state.add_armies(self.territory, self.armies)
         return new_game_state
 
 
@@ -223,18 +233,18 @@ class AttackAction(Action):
 
         if outcome[0] == 0:
             # defender wins, attacker loses all armies (except one)
-            new_game_state.armies[self.from_territory] -= self.attacking_armies
+            new_game_state.add_armies(self.from_territory, -self.attacking_armies)
             # the defender has the remaining armies from the outcome
-            new_game_state.armies[self.to_territory] = outcome[1]
+            new_game_state.set_armies(self.to_territory, outcome[1])
         else:
             # attacker wins
-            new_game_state.armies[self.from_territory] -= self.attacking_armies
-            new_game_state.armies[self.to_territory] = outcome[0]
+            new_game_state.add_armies(self.from_territory, -self.attacking_armies)
+            new_game_state.set_armies(self.to_territory, outcome[0])
 
             # transfer the territory to the attacker
-            new_game_state.owner[self.to_territory] = new_game_state.current_player
+            new_game_state.set_owner(self.to_territory, new_game_state.current_player)
 
-            new_game_state.conquered_territory_this_turn = True
+            new_game_state.set_scalar('conquered_territory_this_turn', True)
 
             # If the defending player has no territories left, they are defeated
             # Their cards are transferred to the attacker, and check whether the
@@ -243,16 +253,17 @@ class AttackAction(Action):
                 new_game_state.owner[territory] == defending_player
                 for territory in new_game_state.territory_ids
             ):
-                new_game_state.defeated_players.append(defending_player)
+                new_game_state.add_defeated_player(defending_player)
 
                 new_game_state.player_hands[attacking_player].extend(
                     new_game_state.player_hands[defending_player]
                 )
                 new_game_state.player_hands[defending_player] = []
+                new_game_state.recompute_hands_deck_hash()
 
                 # If the attacking player has more than 4 cards, they must trade
                 if len(new_game_state.player_hands[attacking_player]) > 4:
-                    new_game_state.current_turn_phase = 'trade_cards'
+                    new_game_state.set_scalar('current_turn_phase', 'trade_cards')
 
         return new_game_state
 
@@ -293,7 +304,7 @@ class FortifyAction(Action):
         Apply the fortify action to the game state.
         """
         new_game_state = game_state.copy()
-        new_game_state.armies[self.from_territory] -= self.armies
-        new_game_state.armies[self.to_territory] += self.armies
-        new_game_state.fortified_territory_this_turn = True
+        new_game_state.add_armies(self.from_territory, -self.armies)
+        new_game_state.add_armies(self.to_territory, self.armies)
+        new_game_state.set_scalar('fortified_territory_this_turn', True)
         return new_game_state

@@ -70,6 +70,12 @@ class GameEngine:
         # Initialize player hands
         game_state.player_hands = {i: [] for i in range(number_of_players)}
 
+        # This builds up the state via direct field assignment rather than
+        # the incremental set_owner()/set_armies()/set_scalar() setters (there
+        # is no prior state to increment from), so establish the Zobrist hash
+        # with a single full recompute instead.
+        game_state.recompute_hash()
+
         return game_state
 
     @staticmethod
@@ -339,6 +345,7 @@ class GameEngine:
 
         # Shuffle the deck
         random.shuffle(new_state.deck)
+        new_state.recompute_hands_deck_hash()
 
         return new_state
 
@@ -376,5 +383,7 @@ class GameEngine:
                     -1,
                     card_types[i],
                 )
+
+        new_state.recompute_hands_deck_hash()
 
         return new_state

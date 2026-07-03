@@ -2,6 +2,13 @@ import array
 import json
 
 from risk_agent.game_elements.board import Board
+from risk_agent.game_elements.zobrist import (
+    armies_key,
+    compute_hands_deck_hash,
+    defeated_key,
+    flag_key,
+    owner_key,
+)
 
 
 class GameState:
@@ -30,6 +37,101 @@ class GameState:
         self.reinforcements_this_turn: int = 0
         self.card_trade_in_this_turn: int = -1
         self.fortified_territory_this_turn: bool = False
+
+        # Incrementally-maintained Zobrist hash, split in two so that
+        # mutating player_hands/deck (which requires a full recompute; see
+        # recompute_hands_deck_hash()) never forces a recompute of the much
+        # larger board-related contribution.
+        self.board_hash: int = 0
+        self.hands_deck_hash: int = 0
+
+    @property
+    def zobrist_hash(self) -> int:
+        return self.board_hash ^ self.hands_deck_hash
+
+    def __hash__(self) -> int:
+        return self.zobrist_hash
+
+    def recompute_hash(self) -> int:
+        """
+        Recompute board_hash and hands_deck_hash from scratch. Used to
+        initialise a freshly-built state's hash and as a correctness oracle
+        for the incremental updates performed by set_owner()/set_armies()/
+        etc. elsewhere.
+        """
+        board_hash = 0
+        for t in self.territory_ids:
+            board_hash ^= owner_key(t, self.owner[t])
+            board_hash ^= armies_key(t, self.armies[t])
+        board_hash ^= flag_key('current_turn_phase', self.current_turn_phase)
+        board_hash ^= flag_key('current_player', self.current_player)
+        board_hash ^= flag_key('current_round', self.current_round)
+        board_hash ^= flag_key('current_turn', self.current_turn)
+        for player_id in self.defeated_players:
+            board_hash ^= defeated_key(player_id)
+        board_hash ^= flag_key(
+            'conquered_territory_this_turn', self.conquered_territory_this_turn
+        )
+        board_hash ^= flag_key(
+            'base_reinforcements_this_turn', self.base_reinforcements_this_turn
+        )
+        board_hash ^= flag_key(
+            'reinforcements_this_turn', self.reinforcements_this_turn
+        )
+        board_hash ^= flag_key(
+            'card_trade_in_this_turn', self.card_trade_in_this_turn
+        )
+        board_hash ^= flag_key(
+            'fortified_territory_this_turn', self.fortified_territory_this_turn
+        )
+        self.board_hash = board_hash
+        self.hands_deck_hash = compute_hands_deck_hash(self.player_hands, self.deck)
+        return self.zobrist_hash
+
+    def set_owner(self, territory_id: int, new_owner: int) -> None:
+        """
+        Set owner[territory_id], keeping board_hash in sync.
+        """
+        self.board_hash ^= owner_key(territory_id, self.owner[territory_id])
+        self.owner[territory_id] = new_owner
+        self.board_hash ^= owner_key(territory_id, new_owner)
+
+    def set_armies(self, territory_id: int, new_armies: int) -> None:
+        """
+        Set armies[territory_id], keeping board_hash in sync.
+        """
+        self.board_hash ^= armies_key(territory_id, self.armies[territory_id])
+        self.armies[territory_id] = new_armies
+        self.board_hash ^= armies_key(territory_id, new_armies)
+
+    def add_armies(self, territory_id: int, delta: int) -> None:
+        self.set_armies(territory_id, self.armies[territory_id] + delta)
+
+    def add_defeated_player(self, player_id: int) -> None:
+        self.board_hash ^= defeated_key(player_id)
+        self.defeated_players.append(player_id)
+
+    def set_scalar(self, attr_name: str, new_value: object) -> None:
+        """
+        Set a scalar board-related field (current_turn_phase, current_player,
+        current_round, current_turn, or one of the four turn flags), keeping
+        board_hash in sync.
+        """
+        old_value = getattr(self, attr_name)
+        self.board_hash ^= flag_key(attr_name, old_value)
+        self.board_hash ^= flag_key(attr_name, new_value)
+        setattr(self, attr_name, new_value)
+
+    def recompute_hands_deck_hash(self) -> None:
+        """
+        Recompute hands_deck_hash from scratch. Must be called after any
+        direct mutation of player_hands/deck (append/remove/extend/pop/...):
+        unlike board_hash, this isn't updated incrementally, since a single
+        card added to or removed from a hand can shift the sorted-occurrence
+        index of every other card in that hand (see zobrist.hand_card_key).
+        Hand sizes are small (<= ~10), so a full recompute here is cheap.
+        """
+        self.hands_deck_hash = compute_hands_deck_hash(self.player_hands, self.deck)
 
     def reset_arrays(self, num_territories: int) -> None:
         """
@@ -138,6 +240,9 @@ class GameState:
         new_state.card_trade_in_this_turn = self.card_trade_in_this_turn
         new_state.fortified_territory_this_turn = self.fortified_territory_this_turn
 
+        new_state.board_hash = self.board_hash
+        new_state.hands_deck_hash = self.hands_deck_hash
+
         return new_state
 
     def to_json_file(self, file_path: str) -> None:
@@ -170,3 +275,5 @@ class GameState:
         # Load the board separately
         self.board = Board()
         self.board.load_from_file(board_file_path)
+
+        self.recompute_hash()

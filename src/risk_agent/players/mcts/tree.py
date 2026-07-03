@@ -199,9 +199,18 @@ class MCTSTree:
         # Reset maximum depth reached for the new root
         self.max_depth_reached = 0
 
+        # Compare the cheap Zobrist hash first and only fall back to the
+        # expensive full state equality check (O(num_territories)) on a
+        # hash match, guarding against the residual collision chance.
+        new_state_hash = hash(new_game_state)
+
         # Look for a direct action child (non-chance) matching new state
         for child in self.root.children:
-            if not isinstance(child, ChanceNode) and child.state == new_game_state:
+            if (
+                not isinstance(child, ChanceNode)
+                and hash(child.state) == new_state_hash
+                and child.state == new_game_state
+            ):
                 self.root = child
                 self.root.parent = None  # Reset parent to None for new root
                 self.root.depth = 0  # Reset depth for new root
@@ -216,7 +225,10 @@ class MCTSTree:
         for chance in self.root.children:
             if isinstance(chance, ChanceNode):
                 for outcome in chance.children:
-                    if outcome.state == new_game_state:
+                    if (
+                        hash(outcome.state) == new_state_hash
+                        and outcome.state == new_game_state
+                    ):
                         # Promote the outcome node as new root
                         self.root = outcome
                         logger.info(
