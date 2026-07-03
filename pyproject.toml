@@ -16,7 +16,10 @@ risk-agent = "risk_agent.main:main"
 run-experiments = "risk_agent.run_experiments:main"
 
 [project.optional-dependencies]
-dev = ["ruff>=0.11.0"]
+dev = ["ruff>=0.11.0", "pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88

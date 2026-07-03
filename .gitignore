@@ -9,6 +9,7 @@ venv/
 # Project data output
 experiments/*/
 data/logs/
+data/stationary_distributions/
 *.log
 
 # IDE settings
