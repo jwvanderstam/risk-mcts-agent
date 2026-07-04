@@ -43,7 +43,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for better analysis relevance
+
       - name: Analyze with SonarCloud
+        if: ${{ secrets.SONAR_TOKEN != '' }}
 
         # You can pin the exact commit or the version.
         # uses: SonarSource/sonarcloud-github-action@v2.2.0
@@ -55,8 +61,12 @@ jobs:
           args:
             # Unique keys of your project and organization. You can find them in SonarCloud > Information (bottom-left menu)
             # mandatory
-            -Dsonar.projectKey=
-            -Dsonar.organization=
+            # NOTE: these are SonarCloud's default naming convention for a repo
+            # imported under this GitHub account. Verify against the actual
+            # values shown in SonarCloud > Information once the project is
+            # imported, and correct if they differ.
+            -Dsonar.projectKey=jwvanderstam_risk-mcts-agent
+            -Dsonar.organization=jwvanderstam
             # Comma-separated paths to directories containing main source files.
             #-Dsonar.sources= # optional, default is project base directory
             # Comma-separated paths to directories containing test source files.
