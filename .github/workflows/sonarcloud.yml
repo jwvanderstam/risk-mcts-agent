@@ -41,6 +41,11 @@ permissions:
 jobs:
   Analysis:
     runs-on: ubuntu-latest
+    env:
+      # `secrets` is not a valid context inside `if:` conditionals, so mirror
+      # it into `env` here (which is valid in `if:`) to skip gracefully when
+      # SONAR_TOKEN hasn't been configured yet.
+      SONAR_TOKEN_SET: ${{ secrets.SONAR_TOKEN != '' }}
 
     steps:
       - name: Checkout repository
@@ -49,7 +54,7 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for better analysis relevance
 
       - name: Analyze with SonarCloud
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: ${{ env.SONAR_TOKEN_SET == 'true' }}
 
         # You can pin the exact commit or the version.
         # uses: SonarSource/sonarcloud-github-action@v2.2.0
