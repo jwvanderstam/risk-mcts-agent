@@ -90,9 +90,6 @@ class BasicEvaluationPlayer(Player):
         evaluation += self.occupied_territories_trade_feature(
             new_game_state, self.player_id
         )
-        # evaluation += self.unoccupied_territories_trade_feature(
-        #     new_game_state, self.player_id
-        # )
         evaluation += self.trade_value_trade_feature(action)
 
         return evaluation
@@ -156,7 +153,7 @@ class BasicEvaluationPlayer(Player):
         evaluation += 0.02 * self.more_than_one_army_feature(game_state, player_id)
 
         # not in reinforcement and fortification phase
-        if not turn_phase == 'reinforce' and not turn_phase == 'fortify':
+        if turn_phase != 'reinforce' and turn_phase != 'fortify':
             evaluation += 0.52 * self.armies_feature(game_state, player_id)
             evaluation += 0.53 * self.best_enemy_feature(game_state, player_id)
             evaluation += 0.26 * self.enemy_estimated_reinforcements_feature(
@@ -182,7 +179,7 @@ class BasicEvaluationPlayer(Player):
             evaluation += 0.5 * self.victory_proximity_feature(game_state, player_id)
 
         # not in attack phase
-        if not turn_phase == 'attack':
+        if turn_phase != 'attack':
             evaluation += 1.6 * self.distance_to_frontier_feature(game_state, player_id)
             evaluation += 0.04 * self.maximum_threat_feature(game_state, player_id)
 
@@ -200,7 +197,6 @@ class BasicEvaluationPlayer(Player):
             if game_state.owner[neighbor_id] == player_id:
                 continue
 
-            enemy_player_id = game_state.owner[neighbor_id]
             enemy_armies = game_state.armies[neighbor_id]
 
             threat = self.battle_computer.get_attacker_win_rate(
@@ -304,6 +300,43 @@ class BasicEvaluationPlayer(Player):
 
         return -best_enemy_rating
 
+    def _border_threat_stats(
+        self, game_state: GameState, continent: dict, exclude_owner_id: int
+    ) -> tuple[float, float]:
+        """
+        Sum of squared threats and the maximum single threat across all
+        border territories of a continent, i.e. territories with a neighbor
+        not owned by exclude_owner_id.
+        """
+        threat_sum = 0.0
+        max_threat = 0.0
+        for territory_id in continent['territories']:
+            for neighbor_id in game_state.board.adjacency_list[territory_id]:
+                if game_state.owner[neighbor_id] != exclude_owner_id:
+                    threat = self.threat(game_state, territory_id)
+                    threat_sum += threat**2
+                    if threat > max_threat:
+                        max_threat = threat
+        return threat_sum, max_threat
+
+    def _single_enemy_owner_of_continent(
+        self, game_state: GameState, continent: dict, player_id: int
+    ) -> int | None:
+        """
+        Return the enemy player id if the continent is entirely owned by a
+        single player other than player_id, else None.
+        """
+        enemy_player_id = -1
+        for territory_id in continent['territories']:
+            owner = game_state.owner[territory_id]
+            if owner == player_id:
+                return None
+            elif enemy_player_id == -1:
+                enemy_player_id = owner
+            elif owner != enemy_player_id:
+                return None
+        return enemy_player_id
+
     def continent_safety_feature(self, game_state: GameState, player_id: int) -> float:
         """
         Feature: Negative measurement of the threat of an enemy player to the player's continents.
@@ -317,19 +350,9 @@ class BasicEvaluationPlayer(Player):
                 game_state.owner[territory_id] == player_id
                 for territory_id in continent['territories']
             ):
-                threat_sum = 0.0
-                max_threat = 0.0
-
-                # for each border territory of the continent, calculate the threat
-                for territory_id in continent['territories']:
-                    for neighbor_id in game_state.board.adjacency_list[territory_id]:
-                        if game_state.owner[neighbor_id] != player_id:
-                            threat = self.threat(game_state, territory_id)
-                            threat_sum += threat**2
-
-                            if threat > max_threat:
-                                max_threat = threat
-
+                threat_sum, max_threat = self._border_threat_stats(
+                    game_state, continent, player_id
+                )
                 continent_safety_feature += (
                     threat_sum + max_threat
                 ) * continent_ratings[continent_id]
@@ -344,29 +367,13 @@ class BasicEvaluationPlayer(Player):
         continent_ratings = self.continent_rating(game_state)
 
         for continent_id, continent in game_state.board.continents.items():
-            # check if any enemy player owns the continent
-            owns_continent: bool = True
-            enemy_player_id = -1
-            for territory_id in continent['territories']:
-                if game_state.owner[territory_id] == player_id:
-                    owns_continent = False
-                    continue
-                elif enemy_player_id == -1:
-                    enemy_player_id = game_state.owner[territory_id]
-                elif game_state.owner[territory_id] != enemy_player_id:
-                    owns_continent = False
-                    break
-
-            if owns_continent:
-                threat_sum = 0.0
-
-                for territory_id in continent['territories']:
-                    for neighbor_id in game_state.board.adjacency_list[territory_id]:
-                        if game_state.owner[neighbor_id] != enemy_player_id:
-                            # add the threat of the enemy player to the continent
-                            threat = self.threat(game_state, territory_id)
-                            threat_sum += threat**2
-
+            enemy_player_id = self._single_enemy_owner_of_continent(
+                game_state, continent, player_id
+            )
+            if enemy_player_id is not None:
+                threat_sum, _ = self._border_threat_stats(
+                    game_state, continent, enemy_player_id
+                )
                 continent_threat_feature += threat_sum * continent_ratings[continent_id]
 
         return continent_threat_feature
@@ -421,7 +428,6 @@ class BasicEvaluationPlayer(Player):
             for territory_id in continent['territories']:
                 if game_state.owner[territory_id] == player_id:
                     owns_continent = False
-                    continue
                 elif enemy_player_id == -1:
                     enemy_player_id = game_state.owner[territory_id]
                 elif game_state.owner[territory_id] != enemy_player_id:

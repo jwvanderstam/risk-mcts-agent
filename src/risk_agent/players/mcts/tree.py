@@ -320,21 +320,13 @@ class MCTSTree:
             depth += 1
         return node, depth
 
-    def expansion(
-        self,
-        node: MCTSNode,
-        battle_computer: BattleComputer,
-    ) -> MCTSNode:
+    def _apply_expansion_heuristics(
+        self, node: MCTSNode, actions: list[Action]
+    ) -> list[Action]:
         """
-        Expand the node by generating all possible actions from the current state
-        and creating child nodes for each action.
+        Filter actions down to only the max-army option when the corresponding
+        "always reinforce/fortify with all armies" heuristic is enabled.
         """
-        # If the node is terminal return it
-        if node.state.is_terminal():
-            return node
-
-        actions = GameEngine.get_valid_actions(node.state)
-
         if (
             self.reinforce_all_heuristic
             and node.state.current_turn_phase == 'reinforce'
@@ -364,106 +356,157 @@ class MCTSTree:
                 for action in actions
                 if isinstance(action, FortifyAction) and action.armies == max_armies
             ]
+        return actions
+
+    def _expand_attack_action(
+        self, node: MCTSNode, action: Action, battle_computer: BattleComputer
+    ) -> MCTSNode:
+        """
+        Expand an AttackAction: the following node is a chance node, so we
+        create it (without yet applying the action) along with outcome nodes
+        for every possible combat outcome.
+        """
+        chance_node = ChanceNode(state=node.state.copy(), action=action)
+        chance_node.parent = node
+        node.children.append(chance_node)
+
+        outcomes = battle_computer.get_all_outcomes(
+            attacking_armies=action.attacking_armies,
+            defending_armies=action.defending_armies,
+        )
+
+        for prob, outcome in outcomes:
+            outcome_state = action.apply_outcome(node.state.copy(), outcome)
+            outcome_node = OutcomeNode(
+                state=outcome_state,
+                action=action,
+                outcome=outcome,
+            )
+            outcome_node.parent = chance_node
+            chance_node.children.append(outcome_node)
+            chance_node.child_probabilities.append(prob)
+
+        return chance_node.children[0]
+
+    def _expand_end_turn_for_self(self, node: MCTSNode, action: Action) -> MCTSNode:
+        """
+        Expand an EndTurnAction for this tree's own player: if a territory
+        was conquered, handle all card-type outcomes that could be awarded
+        via a chance node, then chain into any resulting trade options.
+        """
+        logger.info('[MCTSTree] Expanding EndTurnAction for player actual player.')
+        chance_node = ChanceNode(state=node.state.copy(), action=action)
+        chance_node.parent = node
+        node.children.append(chance_node)
+
+        card_types = {
+            'infantry': 14 / 44,
+            'cavalry': 14 / 44,
+            'artillery': 14 / 44,
+            'wild': 2 / 44,
+        }
+        child_to_return = None
+        for card_type in card_types.keys():
+            # Add an unknown card with this type to the player's hand
+            card = (-1, -1, card_type)
+            outcome_state = action.apply(node.state.copy(), card)
+            outcome_node = OutcomeNode(
+                state=outcome_state,
+                action=action,
+                outcome=card_type,
+            )
+            outcome_node.parent = chance_node
+            chance_node.children.append(outcome_node)
+            chance_node.child_probabilities.append(card_types[card_type])
+
+            # For each of the outcome nodes, we also need to create the next
+            # chance node as the next player can have trade actions based
+            # on certain probabilities
+            child_to_return = self._generate_trade_option_nodes(outcome_node)
+
+        if not child_to_return:
+            child_to_return = chance_node.children[0]
+        return child_to_return
+
+    def _expand_end_turn_for_other(self, node: MCTSNode, action: Action) -> MCTSNode:
+        """
+        Expand an EndTurnAction for another player after a conquest this turn:
+        apply it directly with an unknown card, then chain into any resulting
+        trade options.
+        """
+        logger.info('[MCTSTree] Expanding EndTurnAction for another player.')
+        # If the action is an EndTurnAction for another player, we can apply it
+        # directly with a unknown card added to the player's hand
+        card = (-1, -1, 'unknown')
+        new_state = action.apply(node.state.copy(), card)
+        new_node = MCTSNode(state=new_state, action=action)
+        new_node.parent = node
+        node.children.append(new_node)
+
+        # And we also need to create the next chance node as the next player
+        # can have trade actions based on certain probabilities
+        child_to_return = self._generate_trade_option_nodes(new_node)
+
+        if not child_to_return:
+            child_to_return = new_node
+        return child_to_return
+
+    def _expand_generic_action(self, node: MCTSNode, action: Action) -> MCTSNode:
+        """Apply a non-attack, non-EndTurn action directly as a single child node."""
+        new_state = action.apply(node.state.copy())
+        new_node = MCTSNode(state=new_state, action=action)
+        new_node.parent = node
+        node.children.append(new_node)
+        return new_node
+
+    def _expand_single_action(
+        self, node: MCTSNode, action: Action, battle_computer: BattleComputer
+    ) -> tuple[MCTSNode, bool]:
+        """
+        Expand a single action into one or more child nodes of `node`.
+        Returns (child, overwrite): overwrite indicates whether this action's
+        child should unconditionally become the "child_to_return" candidate
+        (attack/end-turn actions), as opposed to only when no candidate has
+        been set yet (all other action types).
+        """
+        if isinstance(action, AttackAction):
+            return self._expand_attack_action(node, action, battle_computer), True
+        if (
+            isinstance(action, EndTurnAction)
+            and node.state.current_player == self.player_id
+        ):
+            return self._expand_end_turn_for_self(node, action), True
+        if (
+            isinstance(action, EndTurnAction)
+            and node.state.current_player != self.player_id
+            and node.state.conquered_territory_this_turn
+        ):
+            return self._expand_end_turn_for_other(node, action), True
+        return self._expand_generic_action(node, action), False
+
+    def expansion(
+        self,
+        node: MCTSNode,
+        battle_computer: BattleComputer,
+    ) -> MCTSNode:
+        """
+        Expand the node by generating all possible actions from the current state
+        and creating child nodes for each action.
+        """
+        # If the node is terminal return it
+        if node.state.is_terminal():
+            return node
+
+        actions = GameEngine.get_valid_actions(node.state)
+        actions = self._apply_expansion_heuristics(node, actions)
 
         child_to_return = None
-
         for action in actions:
-            if isinstance(action, AttackAction):
-                # If the action is an AttackAction, the following node will be a
-                # chance node, so we create it and do not yet apply the action
-                # But we create outcome nodes for all possible outcomes
-                chance_node = ChanceNode(state=node.state.copy(), action=action)
-                chance_node.parent = node
-                node.children.append(chance_node)
-
-                outcomes = battle_computer.get_all_outcomes(
-                    attacking_armies=action.attacking_armies,
-                    defending_armies=action.defending_armies,
-                )
-
-                for prob, outcome in outcomes:
-                    outcome_state = action.apply_outcome(node.state.copy(), outcome)
-                    outcome_node = OutcomeNode(
-                        state=outcome_state,
-                        action=action,
-                        outcome=outcome,
-                    )
-                    outcome_node.parent = chance_node
-                    chance_node.children.append(outcome_node)
-                    chance_node.child_probabilities.append(prob)
-
-                child_to_return = chance_node.children[0]
-            elif (
-                isinstance(action, EndTurnAction)
-                and node.state.current_player == self.player_id
-            ):
-                # In case of the EndTurnAction for the player, if a territory was conquered,
-                # we need to handle all three cases of the types of card that could
-                # be awarded to the player, so we add a chance node with all possible
-                # outcomes (card types)
-                logger.info(
-                    '[MCTSTree] Expanding EndTurnAction for player actual player.'
-                )
-                chance_node = ChanceNode(state=node.state.copy(), action=action)
-                chance_node.parent = node
-                node.children.append(chance_node)
-
-                card_types = {
-                    'infantry': 14 / 44,
-                    'cavalry': 14 / 44,
-                    'artillery': 14 / 44,
-                    'wild': 2 / 44,
-                }
-                for card_type in card_types.keys():
-                    # Add an unknown card with this type to the player's hand
-                    card = (-1, -1, card_type)
-                    outcome_state = action.apply(node.state.copy(), card)
-                    outcome_node = OutcomeNode(
-                        state=outcome_state,
-                        action=action,
-                        outcome=card_type,
-                    )
-                    outcome_node.parent = chance_node
-                    chance_node.children.append(outcome_node)
-                    chance_node.child_probabilities.append(card_types[card_type])
-
-                    # For each of the outcome nodes, we also need to create the next
-                    # chance node as the next player can have trade actions based
-                    # on certain probabilities
-                    child_to_return = self._generate_trade_option_nodes(outcome_node)
-
-                if not child_to_return:
-                    child_to_return = chance_node.children[0]
-            elif (
-                isinstance(action, EndTurnAction)
-                and node.state.current_player != self.player_id
-                and node.state.conquered_territory_this_turn
-            ):
-                logger.info('[MCTSTree] Expanding EndTurnAction for another player.')
-                # If the action is an EndTurnAction for another player, we can apply it
-                # directly with a unknown card added to the player's hand
-                card = (-1, -1, 'unknown')
-                new_state = action.apply(node.state.copy(), card)
-                new_node = MCTSNode(state=new_state, action=action)
-                new_node.parent = node
-                node.children.append(new_node)
-
-                # And we also need to create the next chance node as the next player
-                # can have trade actions based on certain probabilities
-                child_to_return = self._generate_trade_option_nodes(new_node)
-
-                if not child_to_return:
-                    child_to_return = new_node
-            else:
-                # For all other actions, just apply the action directly
-                new_state = action.apply(node.state.copy())
-                new_node = MCTSNode(state=new_state, action=action)
-                new_node.parent = node
-                node.children.append(new_node)
-
-                # If this is the first child created, set it to return
-                if child_to_return is None:
-                    child_to_return = new_node
+            new_child, overwrite = self._expand_single_action(
+                node, action, battle_computer
+            )
+            if overwrite or child_to_return is None:
+                child_to_return = new_child
 
         # If no children were created, return the current node
         if not node.children:
@@ -478,6 +521,73 @@ class MCTSTree:
 
         # Then return an arbitrary child node to start the simulation
         return child_to_return
+
+    def _playout_step(
+        self, current_state: GameState, battle_computer: BattleComputer
+    ) -> tuple[GameState | None, list[float] | None]:
+        """
+        Advance a playout by one step. Returns (next_state, immediate_reward):
+          - immediate_reward is not None: the playout must stop now and return
+            this reward directly (an out-of-range attack was selected).
+          - next_state is None (with immediate_reward None): no legal actions
+            were available; the caller should stop and score normally.
+          - otherwise: next_state is the state to continue the playout with.
+        """
+        # check if the current player is not defeated
+        if current_state.current_player in current_state.defeated_players:
+            return GameEngine.apply_action(current_state, EndTurnAction()), None
+
+        if current_state.current_turn_phase == 'trade_cards':
+            # If the current turn phase is 'trade_cards', handle trading via the
+            # trade probabilities
+            number_of_cards = len(
+                current_state.player_hands[current_state.current_player]
+            )
+            if number_of_cards in self.trade_probabilities:
+                trade_type = random.choices(
+                    list(self.trade_probabilities[number_of_cards].keys()),
+                    weights=list(self.trade_probabilities[number_of_cards].values()),
+                    k=1,
+                )[0]
+                current_state = GameEngine.make_trade_possible_in_game_state(
+                    current_state,
+                    trade_type=trade_type,
+                    player_id=current_state.current_player,
+                )
+
+        legal_actions = GameEngine.get_valid_actions(current_state)
+        if not legal_actions:
+            logger.warning(
+                '[MCTSTree] No legal actions available.'
+                f'Ending playout for state: {current_state}'
+            )
+            return None, None
+
+        # Use the playout policy to select an action
+        action = self.playout_policy(legal_actions, current_state)
+
+        if isinstance(action, AttackAction):
+            if (
+                action.attacking_armies > battle_computer.max_attacking_armies
+                or action.defending_armies > battle_computer.max_defending_armies
+            ):
+                logger.warning(
+                    '[MCTSTree] Attack action exceeds max armies. Returning 0.0 reward.'
+                )
+                return None, [0.0] * current_state.number_of_players
+
+            # Apply the attack action with battle computer logic
+            current_state = action.apply(current_state, battle_computer)
+
+            # If the attack action led to defeating a player and more than
+            # four cards for the current player, trade in cards for reinforcements
+            if len(current_state.player_hands[current_state.current_player]) > 4:
+                current_state.current_turn_phase = 'trade_cards'
+        else:
+            # For non-attack actions, just apply the action directly
+            current_state = action.apply(current_state)
+
+        return current_state, None
 
     def playout(
         self,
@@ -494,65 +604,14 @@ class MCTSTree:
 
         # Randomly play out the game until a terminal state is reached
         while not current_state.is_terminal():
-            # check if the current player is not defeated
-            if current_state.current_player in current_state.defeated_players:
-                current_state = GameEngine.apply_action(current_state, EndTurnAction())
-            else:
-                if current_state.current_turn_phase == 'trade_cards':
-                    # If the current turn phase is 'trade_cards', handle trading via the
-                    # trade probabilities
-                    number_of_cards = len(
-                        current_state.player_hands[current_state.current_player]
-                    )
-                    if number_of_cards in self.trade_probabilities:
-                        trade_type = random.choices(
-                            list(self.trade_probabilities[number_of_cards].keys()),
-                            weights=list(
-                                self.trade_probabilities[number_of_cards].values()
-                            ),
-                            k=1,
-                        )[0]
-                        current_state = GameEngine.make_trade_possible_in_game_state(
-                            current_state,
-                            trade_type=trade_type,
-                            player_id=current_state.current_player,
-                        )
-
-                legal_actions = GameEngine.get_valid_actions(current_state)
-                if not legal_actions:
-                    logger.warning(
-                        '[MCTSTree] No legal actions available.'
-                        f'Ending playout for state: {current_state}'
-                    )
-                    break
-
-                # Use the playout policy to select an action
-                action = self.playout_policy(legal_actions, current_state)
-
-                if isinstance(action, AttackAction):
-                    if (
-                        action.attacking_armies > battle_computer.max_attacking_armies
-                        or action.defending_armies
-                        > battle_computer.max_defending_armies
-                    ):
-                        logger.warning(
-                            '[MCTSTree] Attack action exceeds max armies. Returning 0.0 reward.'
-                        )
-                        return [0.0] * current_state.number_of_players
-
-                    # Apply the attack action with battle computer logic
-                    current_state = action.apply(current_state, battle_computer)
-
-                    # If the attack action led to defeating a player and more than
-                    # four cards for the current player, trade in cards for reinforcements
-                    if (
-                        len(current_state.player_hands[current_state.current_player])
-                        > 4
-                    ):
-                        current_state.current_turn_phase = 'trade_cards'
-                else:
-                    # For non-attack actions, just apply the action directly
-                    current_state = action.apply(current_state)
+            next_state, immediate_reward = self._playout_step(
+                current_state, battle_computer
+            )
+            if immediate_reward is not None:
+                return immediate_reward
+            if next_state is None:
+                break
+            current_state = next_state
 
         logger.info(
             f'[MCTSTree] Winner determined as {current_state.determine_winner()} '
@@ -870,7 +929,7 @@ class ConfidentMCTSTree(MCTSTree):
         if node.state.current_player in [
             self.player_id,
             self.alliance_player_id,
-        ] and not (self.player_id == self.alliance_player_id):
+        ] and self.player_id != self.alliance_player_id:
             logger.info(
                 '[ConfidentMCTSTree] Using confident search policy for player or alliance.'
             )

@@ -1,7 +1,6 @@
 import logging
 import os
 import time
-import traceback
 
 import pygame
 import yaml
@@ -33,7 +32,7 @@ class GameManager:
         self.max_attacking_armies: int = 500
         self.max_defending_armies: int = 500
 
-        self.renderer: Renderer = None  # type: ignore[assignment]
+        self.renderer: Renderer | None = None
         self.clock: pygame.time.Clock
         self.action_delay_ms: int = 1000  # Delay in milliseconds for action delay
         self.running_pygame_loop: bool = True
@@ -52,68 +51,77 @@ class GameManager:
 
         try:
             self._setup_game()
-        except Exception as e:
-            logger.error(f'Error setting up game: {e}')
-            traceback.print_exc()
+        except Exception:
+            logger.exception('Error setting up game')
             return
 
         try:
-            while not self._game_is_over() and self.running_pygame_loop:
-                self._handle_pygame_events()
-                if not self.running_pygame_loop:
-                    self.renderer.quit()
-                    break
-
-                if self.renderer:
-                    self.renderer.render(game_state=self.game_state)
-                    self.clock.tick(
-                        30
-                    )  # Maintain base FPS for event handling and smooth delay
-                    pygame.time.delay(self.action_delay_ms)
-
-                if self.data_collector:
-                    # Log the game state at the start of each turn
-                    if (
-                        self.game_state.current_turn_phase == 'reinforce'
-                        and self.game_state.reinforcements_this_turn == 0
-                    ):
-                        self.data_collector.collect_turn(
-                            turn=self.game_state.current_turn,
-                            game_state=self.game_state,
-                        )
-
-                self._execute_action_step()
-        except Exception as e:
-            logger.error(f'Error during game loop: {e}')
-            traceback.print_exc()
+            self._run_game_loop()
+        except Exception:
+            logger.exception('Error during game loop')
         finally:
-            logger.info('Game loop ended or interrupted, saving data.')
+            self._finalize_game(start_time)
+
+    def _run_game_loop(self) -> None:
+        """
+        Repeatedly advance the game until it ends or the pygame window is closed.
+        """
+        while not self._game_is_over() and self.running_pygame_loop:
+            self._handle_pygame_events()
+            if not self.running_pygame_loop:
+                self.renderer.quit()
+                break
+
+            if self.renderer:
+                self.renderer.render(game_state=self.game_state)
+                self.clock.tick(30)  # Maintain base FPS for event handling and smooth delay
+                pygame.time.delay(self.action_delay_ms)
 
             if self.data_collector:
-                self.data_collector.collect_game(
-                    game_state=self.game_state,
-                    duration=int(time.time() - start_time),
-                )
-                self.data_collector.save_all()
-                logger.info('Data collector saved all data.')
+                # Log the game state at the start of each turn
+                if (
+                    self.game_state.current_turn_phase == 'reinforce'
+                    and self.game_state.reinforcements_this_turn == 0
+                ):
+                    self.data_collector.collect_turn(
+                        turn=self.game_state.current_turn,
+                        game_state=self.game_state,
+                    )
 
-            try:
-                if self.renderer:
-                    self.renderer.quit()
-                    logger.info('Renderer shut down successfully.')
-            except Exception as e:
-                logger.error(f'Error shutting down renderer: {e}')
+            self._execute_action_step()
 
-            try:
-                if self.save_final_game_state:
-                    if self.game_state_save_path.endswith('.fen'):
-                        with open(self.game_state_save_path, 'w') as f:
-                            f.write(self.game_state.to_fen())
-                    else:
-                        self.game_state.to_json_file(self.game_state_save_path)
-                    logger.info(f'Game state saved to {self.game_state_save_path}')
-            except Exception as e:
-                logger.error(f'Error saving game state: {e}')
+    def _finalize_game(self, start_time: float) -> None:
+        """
+        Persist collected data, shut down the renderer, and save the final
+        game state once the game loop has ended or been interrupted.
+        """
+        logger.info('Game loop ended or interrupted, saving data.')
+
+        if self.data_collector:
+            self.data_collector.collect_game(
+                game_state=self.game_state,
+                duration=int(time.time() - start_time),
+            )
+            self.data_collector.save_all()
+            logger.info('Data collector saved all data.')
+
+        try:
+            if self.renderer:
+                self.renderer.quit()
+                logger.info('Renderer shut down successfully.')
+        except Exception:
+            logger.exception('Error shutting down renderer')
+
+        try:
+            if self.save_final_game_state:
+                if self.game_state_save_path.endswith('.fen'):
+                    with open(self.game_state_save_path, 'w') as f:
+                        f.write(self.game_state.to_fen())
+                else:
+                    self.game_state.to_json_file(self.game_state_save_path)
+                logger.info(f'Game state saved to {self.game_state_save_path}')
+        except Exception:
+            logger.exception('Error saving game state')
 
     def _handle_pygame_events(self) -> None:
         """Hanldle pygame events, primarly for quitting."""
@@ -122,9 +130,54 @@ class GameManager:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running_pygame_loop = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    self.running_pygame_loop = False
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self.running_pygame_loop = False
+
+    def _create_mcts_player(
+        self, player_id: int, merged_settings: dict
+    ) -> MCTSPlayer | ConfidentMCTSPlayer:
+        """
+        Build an MCTSConfig from the merged player settings and instantiate
+        the corresponding MCTS player (plain or Confident).
+        """
+        config = MCTSConfig(
+            max_attacking_armies=self.max_attacking_armies,
+            max_defending_armies=self.max_defending_armies,
+            number_of_players=self.number_of_players,
+            C=merged_settings.get('C', 1.41),
+            search_policy=merged_settings.get('search_policy', 'max^n'),
+            playout_policy=merged_settings.get('playout_policy', 'Random'),
+            reinforce_all_heuristic=merged_settings.get(
+                'reinforce_all_heuristic', False
+            ),
+            fortify_all_heuristic=merged_settings.get('fortify_all_heuristic', False),
+            gamma=merged_settings.get('gamma', 1.0),
+            stopping_condition=merged_settings.get('stopping_condition', 'TimeBased'),
+            selection_policy=merged_settings.get('selection_policy', 'MaxChild'),
+            evaluative_policy=merged_settings.get('evaluative_policy', 'Dummy'),
+            think_time=merged_settings.get('think_time', 1.0),
+            max_iterations=merged_settings.get('max_iterations', 1000),
+            policy_convergence_window=merged_settings.get(
+                'policy_convergence_window', 10
+            ),
+        )
+
+        print(config)
+
+        if config.search_policy == 'Confident' or config.playout_policy == 'Confident':
+            print('Creating ConfidentMCTSPlayer')
+            return ConfidentMCTSPlayer(
+                player_id=player_id,
+                config=config,
+                battle_computer=self.battle_computer,
+                data_collector=self.data_collector,
+            )
+        return MCTSPlayer(
+            player_id=player_id,
+            config=config,
+            battle_computer=self.battle_computer,
+            data_collector=self.data_collector,
+        )
 
     def _setup_players(self) -> None:
         """
@@ -161,54 +214,7 @@ class GameManager:
                     battle_computer=self.battle_computer,
                 )
             elif player_type == 'mcts':
-                config = MCTSConfig(
-                    max_attacking_armies=self.max_attacking_armies,
-                    max_defending_armies=self.max_defending_armies,
-                    number_of_players=self.number_of_players,
-                    C=merged_settings.get('C', 1.41),
-                    search_policy=merged_settings.get('search_policy', 'max^n'),
-                    playout_policy=merged_settings.get('playout_policy', 'Random'),
-                    reinforce_all_heuristic=merged_settings.get(
-                        'reinforce_all_heuristic', False
-                    ),
-                    fortify_all_heuristic=merged_settings.get(
-                        'fortify_all_heuristic', False
-                    ),
-                    gamma=merged_settings.get('gamma', 1.0),
-                    stopping_condition=merged_settings.get(
-                        'stopping_condition', 'TimeBased'
-                    ),
-                    selection_policy=merged_settings.get(
-                        'selection_policy', 'MaxChild'
-                    ),
-                    evaluative_policy=merged_settings.get('evaluative_policy', 'Dummy'),
-                    think_time=merged_settings.get('think_time', 1.0),
-                    max_iterations=merged_settings.get('max_iterations', 1000),
-                    policy_convergence_window=merged_settings.get(
-                        'policy_convergence_window', 10
-                    ),
-                )
-
-                print(config)
-
-                if (
-                    config.search_policy == 'Confident'
-                    or config.playout_policy == 'Confident'
-                ):
-                    print('Creating ConfidentMCTSPlayer')
-                    player_instance = ConfidentMCTSPlayer(
-                        player_id=i,
-                        config=config,
-                        battle_computer=self.battle_computer,
-                        data_collector=self.data_collector,
-                    )
-                else:
-                    player_instance = MCTSPlayer(
-                        player_id=i,
-                        config=config,
-                        battle_computer=self.battle_computer,
-                        data_collector=self.data_collector,
-                    )
+                player_instance = self._create_mcts_player(i, merged_settings)
             elif player_type == 'human':
                 player_instance = HumanPlayer(
                     player_id=i,
@@ -368,11 +374,10 @@ class GameManager:
                 self.process_settings()
         except FileNotFoundError:
             logger.error(f'Settings file not found: {settings_path}')
-        except yaml.YAMLError as e:
-            logger.error(f'Error reading settings file: {e}')
-        except Exception as e:
-            logger.error(f'Unexpected error loading settings: {e}')
-            traceback.print_exc()
+        except yaml.YAMLError:
+            logger.exception('Error reading settings file')
+        except Exception:
+            logger.exception('Unexpected error loading settings')
 
     def process_settings(self) -> None:
         """

@@ -162,8 +162,8 @@ class DataCollector:
             )
 
             logger.info(f'Metrics successfully saved to {self.experiment_path}')
-        except OSError as e:
-            logger.error(f'Error saving metrics to file: {e}')
+        except OSError:
+            logger.exception('Error saving metrics to file')
 
     def reset(self) -> None:
         """
@@ -212,5 +212,5 @@ class DataCollector:
                 logger.info(f'Loaded existing game data from {game_data_path}')
             else:
                 logger.info(f'No existing game data found at {game_data_path}')
-        except OSError as e:
-            logger.error(f'Error loading existing game data: {e}')
+        except OSError:
+            logger.exception('Error loading existing game data')

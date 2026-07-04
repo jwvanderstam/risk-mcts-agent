@@ -81,6 +81,49 @@ class Renderer:
         if not self.continent_positions:
             logger.warning(f"No continent positions found in '{file_path}'.")
 
+    def _draw_wraparound_connection(
+        self, line_color: tuple, pos1: tuple, pos2: tuple
+    ) -> None:
+        """Draw the Alaska(1)-Kamchatka(35) connection as two edge-wrapping segments."""
+        pygame.draw.line(self.screen, line_color, (pos1[0], pos1[1]), (0, pos1[1]), 2)
+        pygame.draw.line(
+            self.screen,
+            line_color,
+            (pos2[0], pos2[1]),
+            (self.map_width, pos2[1]),
+            2,
+        )
+
+    def _draw_territory_connections(
+        self,
+        terr_id: int,
+        pos1: tuple,
+        adjacencies: list,
+        line_color: tuple,
+        drawn_connections: set,
+    ) -> None:
+        """Draw every not-yet-drawn connection from one territory to its neighbors."""
+        for adj_id in adjacencies:
+            adj_id_int = int(adj_id)
+            connection_pair = tuple(sorted((terr_id, adj_id_int)))
+            if connection_pair in drawn_connections:
+                continue
+
+            pos2 = self.territory_positions.get(adj_id_int)
+            if not pos2:
+                continue
+
+            # Handle Alaska-Kamchatka wrap-around line TODO: make this more generic
+            if (terr_id == 1 and adj_id_int == 35) or (
+                terr_id == 35 and adj_id_int == 1
+            ):
+                self._draw_wraparound_connection(line_color, pos1, pos2)
+            else:
+                pygame.draw.line(
+                    self.screen, line_color, pos1, pos2, 2
+                )  # Thickness 2
+            drawn_connections.add(connection_pair)
+
     def _draw_connections(self, game_state: 'GameState') -> None:
         line_color = (120, 120, 120)  # Medium-grey lines
         drawn_connections = set()
@@ -95,36 +138,9 @@ class Renderer:
             if not pos1:
                 continue
 
-            for adj_id in adjacencies:
-                adj_id_int = int(adj_id)
-                connection_pair = tuple(sorted((terr_id, adj_id_int)))
-                if connection_pair in drawn_connections:
-                    continue
-
-                pos2 = self.territory_positions.get(adj_id_int)
-                if not pos2:
-                    continue
-
-                # Handle Alaska-Kamchatka wrap-around line TODO: make this more generic
-                if (terr_id == 1 and adj_id_int == 35) or (
-                    terr_id == 35 and adj_id_int == 1
-                ):
-                    # Alaska (1) to Kamchatka (35)
-                    pygame.draw.line(
-                        self.screen, line_color, (pos1[0], pos1[1]), (0, pos1[1]), 2
-                    )
-                    pygame.draw.line(
-                        self.screen,
-                        line_color,
-                        (pos2[0], pos2[1]),
-                        (self.map_width, pos2[1]),
-                        2,
-                    )
-                else:
-                    pygame.draw.line(
-                        self.screen, line_color, pos1, pos2, 2
-                    )  # Thickness 2
-                drawn_connections.add(connection_pair)
+            self._draw_territory_connections(
+                terr_id, pos1, adjacencies, line_color, drawn_connections
+            )
 
     def _draw_territories(self, game_state: 'GameState') -> None:
         territory_radius = 20
@@ -332,8 +348,8 @@ if __name__ == '__main__':
         )
         logger.error(f'Current working directory: {__import__("os").getcwd()}')
         exit()
-    except Exception as e:
-        logger.error(f'Unexpected error loading board: {e}')
+    except Exception:
+        logger.exception('Unexpected error loading board')
         exit()
 
     num_testing_players = 4
@@ -352,8 +368,8 @@ if __name__ == '__main__':
             height=800,
             sidebar_width=300,
         )
-    except ValueError as e:
-        logger.error(f'Error initializing renderer: {e}')
+    except ValueError:
+        logger.exception('Error initializing renderer')
         exit()
 
     logger.info('Starting render loop...')
@@ -364,9 +380,8 @@ if __name__ == '__main__':
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                running = False
 
         risk_renderer.render(game_state=current_game_state)
         clock.tick(30)  # Limit to 30 FPS

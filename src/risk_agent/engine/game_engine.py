@@ -149,88 +149,140 @@ class GameEngine:
         """
         Get the valid actions for the current game state.
         """
+        match game_state.current_turn_phase:
+            case 'trade_cards':
+                return GameEngine._get_valid_trade_cards_actions(game_state)
+            case 'reinforce':
+                return GameEngine._get_valid_reinforce_actions(game_state)
+            case 'attack':
+                return GameEngine._get_valid_attack_actions(game_state)
+            case 'fortify':
+                return GameEngine._get_valid_fortify_actions(game_state)
+        return []
+
+    @staticmethod
+    def _get_valid_trade_cards_actions(game_state: GameState) -> list[Action]:
+        player = game_state.current_player
+        valid_actions: list[Action] = []
+
+        # If the player has less than 3 cards, they cannot trade
+        # if the player has 3 or more cards, they can trade
+        # if the player has 5 or more cards, they must trade
+        if len(game_state.player_hands[player]) < 3:
+            return [EndPhaseAction()]
+
+        possible_card_trades = GameEngine.determine_card_trades(
+            game_state=game_state,
+        )
+        if possible_card_trades:
+            valid_actions.extend(possible_card_trades)
+
+        if len(game_state.player_hands[player]) <= 4:
+            valid_actions.append(EndPhaseAction())
+        return valid_actions
+
+    @staticmethod
+    def _get_valid_reinforce_actions(game_state: GameState) -> list[Action]:
+        player = game_state.current_player
+        valid_actions: list[Action] = []
+
+        total_reinforcements = GameEngine.determine_reinforcements(
+            game_state=game_state,
+        )
+
+        if game_state.reinforcements_this_turn == total_reinforcements:
+            return [EndPhaseAction()]
+
+        for territory in game_state.territories_owned_by(player):
+            for number_of_armies in range(
+                1,
+                total_reinforcements - game_state.reinforcements_this_turn + 1,
+            ):
+                valid_actions.append(
+                    ReinforceAction(territory=territory, armies=number_of_armies)
+                )
+        return valid_actions
+
+    @staticmethod
+    def _get_valid_attack_actions(game_state: GameState) -> list[Action]:
         # to avoid repeated dict lookups, we pull out local variables
         owners = game_state.owner
         armies = game_state.armies
         player = game_state.current_player
+        valid_actions: list[Action] = []
 
-        valid_actions = []
-
-        match game_state.current_turn_phase:
-            case 'trade_cards':
-                # If the player has less than 3 cards, they cannot trade
-                # if the player has 3 or more cards, they can trade
-                # if the player has 5 or more cards, they must trade
-                if len(game_state.player_hands[player]) < 3:
-                    return [EndPhaseAction()]
-
-                possible_card_trades = GameEngine.determine_card_trades(
-                    game_state=game_state,
-                )
-                if possible_card_trades:
-                    valid_actions.extend(possible_card_trades)
-
-                if not len(game_state.player_hands[player]) > 4:
-                    valid_actions.append(EndPhaseAction())
-            case 'reinforce':
-                total_reinforcements = GameEngine.determine_reinforcements(
-                    game_state=game_state,
-                )
-
-                if game_state.reinforcements_this_turn == total_reinforcements:
-                    return [EndPhaseAction()]
-
-                for territory in game_state.territories_owned_by(player):
-                    for number_of_armies in range(
-                        1,
-                        total_reinforcements - game_state.reinforcements_this_turn + 1,
-                    ):
+        for territory in game_state.territories_owned_by(player):
+            if armies[territory] > 1:
+                for target_territory in game_state.board.adjacency_list[territory]:
+                    if owners[target_territory] != player:
                         valid_actions.append(
-                            ReinforceAction(
-                                territory=territory, armies=number_of_armies
+                            AttackAction(
+                                from_territory=territory,
+                                to_territory=target_territory,
+                                attacking_armies=armies[territory] - 1,
+                                defending_armies=armies[target_territory],
                             )
                         )
-            case 'attack':
-                for territory in game_state.territories_owned_by(player):
-                    if armies[territory] > 1:
-                        for target_territory in game_state.board.adjacency_list[
-                            territory
-                        ]:
-                            if owners[target_territory] != player:
-                                valid_actions.append(
-                                    AttackAction(
-                                        from_territory=territory,
-                                        to_territory=target_territory,
-                                        attacking_armies=armies[territory] - 1,
-                                        defending_armies=armies[target_territory],
-                                    )
-                                )
-                valid_actions.append(EndPhaseAction())
-            case 'fortify':
-                if not game_state.fortified_territory_this_turn:
-                    for from_territory in game_state.territories_owned_by(player):
-                        if armies[from_territory] > 1:
-                            reachable_territories = (
-                                GameEngine._find_reachable_territories(
-                                    territory=from_territory,
-                                    player_id=player,
-                                    game_state=game_state,
+        valid_actions.append(EndPhaseAction())
+        return valid_actions
+
+    @staticmethod
+    def _get_valid_fortify_actions(game_state: GameState) -> list[Action]:
+        owners = game_state.owner
+        armies = game_state.armies
+        player = game_state.current_player
+        valid_actions: list[Action] = []
+
+        if not game_state.fortified_territory_this_turn:
+            for from_territory in game_state.territories_owned_by(player):
+                if armies[from_territory] > 1:
+                    reachable_territories = GameEngine._find_reachable_territories(
+                        territory=from_territory,
+                        player_id=player,
+                        game_state=game_state,
+                    )
+                    for to_territory in reachable_territories:
+                        if (
+                            to_territory != from_territory
+                            and owners[to_territory] == player
+                        ):
+                            valid_actions.append(
+                                FortifyAction(
+                                    from_territory=from_territory,
+                                    to_territory=to_territory,
+                                    armies=armies[from_territory] - 1,
                                 )
                             )
-                            for to_territory in reachable_territories:
-                                if (
-                                    to_territory != from_territory
-                                    and owners[to_territory] == player
-                                ):
-                                    valid_actions.append(
-                                        FortifyAction(
-                                            from_territory=from_territory,
-                                            to_territory=to_territory,
-                                            armies=armies[from_territory] - 1,
-                                        )
-                                    )
-                valid_actions.append(EndTurnAction())
+        valid_actions.append(EndTurnAction())
         return valid_actions
+
+    @staticmethod
+    def _evaluate_card_combination(card_combination: tuple) -> int:
+        """
+        Return the trade-in value of a 3-card combination, or 0 if it isn't a
+        valid three-of-a-kind or mixed trade.
+        """
+        card_values = {
+            'infantry': 4,
+            'cavalry': 6,
+            'artillery': 8,
+            'mixed': 10,
+        }
+        counts = Counter(card[2] for card in card_combination)
+        wilds = counts.get('wild', 0)
+
+        # Check for three-of-a-kind trades. Only these types can form
+        # three-of-a-kind; wilds are used as substitutes.
+        for card_type in ('infantry', 'cavalry', 'artillery'):
+            if counts[card_type] == 3 or (counts[card_type] == 2 and wilds == 1):
+                return card_values[card_type]
+
+        # Check for mixed trades
+        present_types = {card[2] for card in card_combination if card[2] != 'wild'}
+        if len(present_types) + wilds == 3:
+            return card_values['mixed']
+
+        return 0
 
     @staticmethod
     def determine_card_trades(
@@ -245,34 +297,8 @@ class GameEngine:
 
         valid_trades = []
 
-        # Only these types can form three-of-a-kind; wilds are used as substitutes
-        card_types = ['infantry', 'cavalry', 'artillery']
-        card_values = {
-            'infantry': 4,
-            'cavalry': 6,
-            'artillery': 8,
-            'mixed': 10,
-        }
-
         for card_combination in combinations(current_player_cards, 3):
-            counts = Counter(card[2] for card in card_combination)
-            wilds = counts.get('wild', 0)
-            value = 0
-
-            # Check for three-of-a-kind trades
-            for type in card_types:
-                if counts[type] == 3 or (counts[type] == 2 and wilds == 1):
-                    value = card_values[type]
-                    break
-
-            # Check for mixed trades
-            if value == 0:
-                present_types = set(
-                    card[2] for card in card_combination if card[2] != 'wild'
-                )
-                if len(present_types) + wilds == 3:
-                    value = card_values['mixed']
-
+            value = GameEngine._evaluate_card_combination(card_combination)
             if value > 0:
                 valid_trades.append(
                     TradeCardsAction(

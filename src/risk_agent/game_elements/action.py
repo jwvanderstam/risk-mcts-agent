@@ -268,11 +268,14 @@ class AttackAction(Action):
         return new_game_state
 
     def apply(
-        self, game_state: 'GameState', battle_computer: 'BattleComputer'
+        self, game_state: 'GameState', battle_computer: 'BattleComputer | None' = None
     ) -> 'GameState':
         """
         Apply the attack action to the game state.
         """
+        if battle_computer is None:
+            raise ValueError('battle_computer must be provided for AttackAction.apply')
+
         # get the combat outcomes from the game engine
         outcome = battle_computer.get_outcome(
             attacking_armies=self.attacking_armies,

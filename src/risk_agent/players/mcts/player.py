@@ -114,9 +114,9 @@ class MCTSPlayer(Player):
                 else random.choice(legal_actions)
             )
 
-        except Exception as e:
-            logger.error(
-                f'[MCTSPlayer {self.player_id}]: Error during action decision: {e}'
+        except Exception:
+            logger.exception(
+                f'[MCTSPlayer {self.player_id}]: Error during action decision'
             )
             return random.choice(legal_actions) if legal_actions else EndPhaseAction()
 
@@ -226,9 +226,9 @@ class ConfidentMCTSPlayer(MCTSPlayer):
                 if best_child.action is not None
                 else random.choice(legal_actions)
             )
-        except Exception as e:
-            logger.error(
-                f'[ConfidentMCTSPlayer {self.player_id}]: Error during action decision: {e}'
+        except Exception:
+            logger.exception(
+                f'[ConfidentMCTSPlayer {self.player_id}]: Error during action decision'
             )
             return random.choice(legal_actions) if legal_actions else EndPhaseAction()
 

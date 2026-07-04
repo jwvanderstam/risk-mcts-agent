@@ -6,6 +6,7 @@ import os
 import random
 import time
 from multiprocessing import Pool
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -149,8 +150,8 @@ def run_single_game(args_tuple: tuple) -> dict:
             'error': None,
         }
 
-    except Exception as e:
-        logger.error(f'Error during run {run_id}: {e}', exc_info=True)
+    except Exception:
+        logger.exception(f'Error during run {run_id}')
         return {
             'run_id': run_id,
             'experiment_name': exp_settings['experiment_name'],
@@ -198,15 +199,11 @@ def save_run_level_data(
 
         logger.info(f'Run {run_id}: Saved action, turn, and player level data')
 
-    except Exception as e:
-        logger.error(
-            f'Error saving run-level data for run {run_id}: {e}', exc_info=True
-        )
+    except Exception:
+        logger.exception(f'Error saving run-level data for run {run_id}')
 
 
-def aggregate_and_save_data(
-    results: list, experiment_output_dir: str, number_of_players: int
-) -> None:
+def aggregate_and_save_data(results: list, experiment_output_dir: str) -> None:
     """
     Aggregate game-level data from all runs and save to a single CSV file.
     Action, turn, and player level data are already saved as individual files per run.
@@ -214,7 +211,6 @@ def aggregate_and_save_data(
     Args:
         results: List of result dictionaries from run_single_game
         experiment_output_dir: Directory to save the aggregated data
-        number_of_players: Number of players in the game
     """
     logger.info(f'Aggregating game-level data for {experiment_output_dir}...')
 
@@ -251,8 +247,8 @@ def aggregate_and_save_data(
         else:
             logger.warning('No game-level data to save')
 
-    except Exception as e:
-        logger.error(f'Error saving game-level data: {e}', exc_info=True)
+    except Exception:
+        logger.exception('Error saving game-level data')
 
 
 def prepare_experiment_runs(exp_settings: dict, experiment_output_dir: str) -> tuple:
@@ -339,7 +335,7 @@ def finalize_experiment_results(
         exp_results = existing_results + exp_results
 
     # Aggregate and save game-level data
-    aggregate_and_save_data(exp_results, experiment_output_dir, number_of_players)
+    aggregate_and_save_data(exp_results, experiment_output_dir)
 
 
 def run_experiment(
@@ -530,13 +526,23 @@ def main() -> None:
     logging.config.dictConfig(logging_config)
 
     try:
-        with open(args.config) as f:
+        # Resolve and confine the config path to the current working
+        # directory: --config is untrusted CLI input, and without this check
+        # a value like '../../../etc/passwd' would let the caller read any
+        # file the process has access to.
+        cwd = Path.cwd().resolve()
+        config_path = Path(args.config).resolve()
+        if cwd != config_path and cwd not in config_path.parents:
+            logger.error(f'Config path {args.config} must be within {cwd}.')
+            return
+
+        with open(config_path) as f:
             experiments_config = yaml.safe_load(f)
     except FileNotFoundError:
         logger.error(f'File {args.config} not found.')
         return
-    except yaml.YAMLError as e:
-        logger.error(f'Error parsing {args.config}: {e}')
+    except yaml.YAMLError:
+        logger.exception(f'Error parsing {args.config}')
         return
 
     # Determine number of processes based on Slurm allocation
